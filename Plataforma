@@ -1,0 +1,421 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    task.wait()
+    LocalPlayer = Players.LocalPlayer
+end
+
+local PLATFORM_SIZE = Vector3.new(8, 1, 8)
+local HEIGHT_STEP = 5
+local STEP_COOLDOWN = 0.15
+local DESCEND_ANCHOR_TIME = 0.18
+
+local COLORS = {
+    Background = Color3.fromRGB(15, 15, 15),
+    BackgroundAlt = Color3.fromRGB(25, 25, 25),
+    Surface = Color3.fromRGB(35, 35, 35),
+    Line = Color3.fromRGB(70, 70, 70),
+    Border = Color3.fromRGB(120, 120, 120),
+    Text = Color3.fromRGB(230, 230, 230),
+    Icon = Color3.fromRGB(200, 200, 200),
+    On = Color3.fromRGB(255, 255, 255),
+    OnFill = Color3.fromRGB(60, 60, 60),
+    Red = Color3.fromRGB(160, 45, 45),
+}
+
+local state = {
+    enabled = false,
+    platform = nil,
+    character = nil,
+    lastStepAt = 0,
+    descendToken = 0,
+}
+
+local function getCharacterParts()
+    local character = LocalPlayer.Character
+    if not character or not character.Parent then
+        return nil, nil, nil
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+
+    if not humanoid or humanoid.Health <= 0 or not root or not root:IsA("BasePart") then
+        return character, nil, nil
+    end
+
+    return character, humanoid, root
+end
+
+local function restoreJump(humanoid)
+    if not humanoid then return end
+    if humanoid:GetAttribute("PlatformOriginalUseJumpPower") ~= nil then
+        humanoid.UseJumpPower = humanoid:GetAttribute("PlatformOriginalUseJumpPower")
+        humanoid:SetAttribute("PlatformOriginalUseJumpPower", nil)
+    end
+    if humanoid:GetAttribute("PlatformOriginalJumpPower") ~= nil then
+        humanoid.JumpPower = humanoid:GetAttribute("PlatformOriginalJumpPower")
+        humanoid:SetAttribute("PlatformOriginalJumpPower", nil)
+    end
+    if humanoid:GetAttribute("PlatformOriginalJumpHeight") ~= nil then
+        humanoid.JumpHeight = humanoid:GetAttribute("PlatformOriginalJumpHeight")
+        humanoid:SetAttribute("PlatformOriginalJumpHeight", nil)
+    end
+end
+
+local function removePlatform()
+    if state.platform then
+        state.platform:Destroy()
+        state.platform = nil
+    end
+
+    local oldCharacter = state.character
+    state.character = nil
+
+    local character = oldCharacter or LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    restoreJump(humanoid)
+
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if root and root:IsA("BasePart") and root:GetAttribute("PlatformWasAnchored") ~= nil then
+        root.Anchored = root:GetAttribute("PlatformWasAnchored")
+        root:SetAttribute("PlatformWasAnchored", nil)
+    end
+end
+
+local function createPlatform(character)
+    if state.platform then
+        state.platform:Destroy()
+    end
+
+    local platform = Instance.new("Part")
+    platform.Name = "RidePlatform_Client"
+    platform.Size = PLATFORM_SIZE
+    platform.Transparency = 0.3
+    platform.Color = Color3.fromRGB(70, 70, 80)
+    platform.Material = Enum.Material.SmoothPlastic
+    platform.CastShadow = false
+    platform.Anchored = true
+    platform.CanCollide = true
+    platform.CanTouch = false
+    platform.CanQuery = false
+    platform.TopSurface = Enum.SurfaceType.Smooth
+    platform.BottomSurface = Enum.SurfaceType.Smooth
+    platform.Parent = workspace
+
+    state.platform = platform
+    state.character = character
+end
+
+local function stepHeight(direction)
+    if not state.enabled then return end
+
+    local now = os.clock()
+    if now - state.lastStepAt < STEP_COOLDOWN then return end
+    state.lastStepAt = now
+
+    local character, humanoid, root = getCharacterParts()
+    if not character or not humanoid or not root then return end
+
+    if direction < 0 then
+        -- Anclar brevemente durante el descenso para evitar que la física
+        -- empuje al personaje mientras atraviesa la geometría.
+        state.descendToken += 1
+        local token = state.descendToken
+
+        if root:GetAttribute("PlatformWasAnchored") == nil then
+            root:SetAttribute("PlatformWasAnchored", root.Anchored)
+        end
+        root.Anchored = true
+        root.CFrame = root.CFrame + Vector3.new(0, -HEIGHT_STEP, 0)
+        root.AssemblyLinearVelocity = Vector3.zero
+
+        task.delay(DESCEND_ANCHOR_TIME, function()
+            if token ~= state.descendToken then return end
+            if root and root.Parent and root:GetAttribute("PlatformWasAnchored") ~= nil then
+                root.Anchored = root:GetAttribute("PlatformWasAnchored")
+                root:SetAttribute("PlatformWasAnchored", nil)
+            end
+        end)
+    else
+        -- Si se pulsa subir mientras el descenso sigue anclado, cancelar
+        -- la liberación pendiente y restaurar el estado normal antes de subir.
+        state.descendToken += 1
+        if root:GetAttribute("PlatformWasAnchored") ~= nil then
+            root.Anchored = root:GetAttribute("PlatformWasAnchored")
+            root:SetAttribute("PlatformWasAnchored", nil)
+        end
+
+        root.CFrame = root.CFrame + Vector3.new(0, HEIGHT_STEP, 0)
+        local velocity = root.AssemblyLinearVelocity
+        root.AssemblyLinearVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+    end
+end
+
+local function getGuiParent()
+    local ok, hui = pcall(function()
+        return gethui and gethui()
+    end)
+    if ok and hui then return hui end
+
+    local okCore, protected = pcall(function()
+        if syn and syn.protect_gui then
+            local gui = Instance.new("ScreenGui")
+            syn.protect_gui(gui)
+            return CoreGui
+        end
+        return CoreGui
+    end)
+    return (okCore and protected) or LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local guiParent = getGuiParent()
+local oldGui = guiParent:FindFirstChild("PlatformControlMenu")
+if oldGui then oldGui:Destroy() end
+local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+if playerGui then
+    local oldPlayerGui = playerGui:FindFirstChild("PlatformControlMenu")
+    if oldPlayerGui then oldPlayerGui:Destroy() end
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "PlatformControlMenu"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 2147483647
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = guiParent
+
+local Frame = Instance.new("Frame")
+Frame.Name = "MainFrame"
+Frame.AnchorPoint = Vector2.new(0.5, 0.5)
+Frame.Position = UDim2.fromScale(0.5, 0.78)
+Frame.Size = UDim2.fromOffset(270, 106)
+Frame.BackgroundColor3 = COLORS.Background
+Frame.BorderSizePixel = 0
+Frame.Active = true
+Frame.Parent = ScreenGui
+
+local frameCorner = Instance.new("UICorner")
+frameCorner.CornerRadius = UDim.new(0, 14)
+frameCorner.Parent = Frame
+
+local frameStroke = Instance.new("UIStroke")
+frameStroke.Color = COLORS.Border
+frameStroke.Thickness = 1
+frameStroke.Transparency = 0.2
+frameStroke.Parent = Frame
+
+local gradient = Instance.new("UIGradient")
+gradient.Color = ColorSequence.new(COLORS.BackgroundAlt, COLORS.Background)
+gradient.Rotation = 90
+gradient.Parent = Frame
+
+local topBar = Instance.new("Frame")
+topBar.Name = "TopBar"
+topBar.Size = UDim2.new(1, 0, 0, 44)
+topBar.BackgroundTransparency = 1
+topBar.Active = true
+topBar.Parent = Frame
+
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.AnchorPoint = Vector2.new(1, 0.5)
+closeBtn.Position = UDim2.new(1, -8, 0.5, 0)
+closeBtn.Size = UDim2.fromOffset(26, 26)
+closeBtn.BackgroundColor3 = COLORS.Surface
+closeBtn.BorderSizePixel = 0
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Text = "×"
+closeBtn.TextSize = 16
+closeBtn.TextColor3 = COLORS.Icon
+closeBtn.Parent = topBar
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 8)
+closeCorner.Parent = closeBtn
+
+local divider = Instance.new("Frame")
+divider.Position = UDim2.fromOffset(44, 0)
+divider.Size = UDim2.new(1, 0, 0, 1)
+divider.BackgroundColor3 = COLORS.Line
+divider.BorderSizePixel = 0
+divider.Parent = Frame
+
+local function createButton(name, text, position, size)
+    local button = Instance.new("TextButton")
+    button.Name = name
+    button.Position = position
+    button.Size = size
+    button.BackgroundColor3 = COLORS.Surface
+    button.BorderSizePixel = 0
+    button.AutoButtonColor = true
+    button.Font = Enum.Font.GothamBold
+    button.Text = text
+    button.TextSize = 13
+    button.TextColor3 = COLORS.Icon
+    button.Parent = Frame
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = button
+
+    return button
+end
+
+local powerBtn = createButton("PowerButton", "Plataforma: OFF",
+    UDim2.fromOffset(12, 10), UDim2.new(1, -24, 0, 36))
+powerBtn.BackgroundColor3 = COLORS.OnFill
+powerBtn.TextColor3 = COLORS.On
+
+local downBtn = createButton("DownButton", "↓  BAJAR",
+    UDim2.fromOffset(12, 58), UDim2.new(0.5, -18, 0, 36))
+local upBtn = createButton("UpButton", "↑  SUBIR",
+    UDim2.new(0.5, 6, 0, 58), UDim2.new(0.5, -18, 0, 36))
+
+local function refreshPowerButton()
+    if state.enabled then
+        powerBtn.Text = "Plataforma: ON"
+        powerBtn.BackgroundColor3 = Color3.fromRGB(45, 145, 65)
+        powerBtn.TextColor3 = COLORS.On
+    else
+        powerBtn.Text = "Plataforma: OFF"
+        powerBtn.BackgroundColor3 = COLORS.Red
+        powerBtn.TextColor3 = COLORS.On
+    end
+end
+
+powerBtn.Activated:Connect(function()
+    state.enabled = not state.enabled
+    refreshPowerButton()
+    if not state.enabled then
+        state.descendToken += 1
+        removePlatform()
+    end
+end)
+
+upBtn.Activated:Connect(function()
+    stepHeight(1)
+end)
+
+downBtn.Activated:Connect(function()
+    stepHeight(-1)
+end)
+
+closeBtn.Activated:Connect(function()
+    state.enabled = false
+    state.descendToken += 1
+    removePlatform()
+    ScreenGui:Destroy()
+end)
+
+-- Arrastrar desde cualquier zona vacía del panel (incluidos los bordes).
+-- Los botones siguen funcionando normalmente al pulsarlos.
+local dragging = false
+local dragStart
+local startPos
+local dragInput
+
+local function pointInside(guiObject, point)
+    local pos = guiObject.AbsolutePosition
+    local size = guiObject.AbsoluteSize
+    return point.X >= pos.X and point.X <= pos.X + size.X
+        and point.Y >= pos.Y and point.Y <= pos.Y + size.Y
+end
+
+local function beginDrag(input)
+    if input.UserInputType ~= Enum.UserInputType.MouseButton1
+        and input.UserInputType ~= Enum.UserInputType.Touch then
+        return
+    end
+
+    -- No iniciar arrastre al pulsar uno de los botones.
+    local point = input.Position
+    if pointInside(powerBtn, point) or pointInside(downBtn, point)
+        or pointInside(upBtn, point) or pointInside(closeBtn, point) then
+        return
+    end
+
+    dragging = true
+    dragStart = point
+    startPos = Frame.Position
+    dragInput = input
+end
+
+Frame.InputBegan:Connect(beginDrag)
+topBar.InputBegan:Connect(beginDrag)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        Frame.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+        dragInput = nil
+    end
+end)
+
+local heartbeatConnection
+heartbeatConnection = RunService.Heartbeat:Connect(function()
+    if not ScreenGui.Parent then
+        if heartbeatConnection then heartbeatConnection:Disconnect() end
+        return
+    end
+
+    local character, humanoid, root = getCharacterParts()
+
+    if not state.enabled then
+        if state.platform then removePlatform() end
+        return
+    end
+
+    if not humanoid or not root then
+        if state.platform then removePlatform() end
+        return
+    end
+
+    if humanoid:GetAttribute("PlatformOriginalUseJumpPower") == nil then
+        humanoid:SetAttribute("PlatformOriginalUseJumpPower", humanoid.UseJumpPower)
+        humanoid:SetAttribute("PlatformOriginalJumpPower", humanoid.JumpPower)
+        humanoid:SetAttribute("PlatformOriginalJumpHeight", humanoid.JumpHeight)
+    end
+
+    humanoid.UseJumpPower = true
+    humanoid.JumpPower = 0
+    humanoid.JumpHeight = 0
+
+    if state.character ~= character or not state.platform or not state.platform.Parent then
+        createPlatform(character)
+    end
+
+    local platform = state.platform
+    if platform then
+        local footOffset = humanoid.HipHeight + (root.Size.Y * 0.5) + (platform.Size.Y * 0.5)
+        platform.CFrame = CFrame.new(
+            root.Position.X,
+            root.Position.Y - footOffset,
+            root.Position.Z
+        )
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    state.descendToken += 1
+    task.wait(0.25)
+    if not state.enabled then return end
+end)
+
+refreshPowerButton()
