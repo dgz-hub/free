@@ -1,0 +1,830 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local workspace = game:GetService("Workspace")
+local localPlayer = Players.LocalPlayer
+while not localPlayer do task.wait() localPlayer = Players.LocalPlayer end
+local PRIMERARG1 = "959d5e90-231d-4f6e-8861-050e2c22b938"
+local elremotelistope = nil
+local mt = getrawmetatable(game)
+local oldNamecall = mt.__namecall
+local hookenable = true
+setreadonly(mt, false)
+mt.__namecall = newcclosure(function(self, ...)
+    if not hookenable then
+        return oldNamecall(self, ...)
+    end
+    local method = getnamecallmethod()
+    if method == "FireServer" then
+        local args = {...}
+        if args[1] == PRIMERARG1 then
+            elremotelistope = self
+            hookenable = false
+            mt.__namecall = oldNamecall
+            setreadonly(mt, true)
+        end
+    end
+    return oldNamecall(self, ...)
+end)
+setreadonly(mt, true)
+local teamCheckEnabled = true
+local KillAllEnabled = false
+local tbl = {
+	Background = Color3.fromRGB(15, 15, 15),
+	BackgroundAlt = Color3.fromRGB(25, 25, 25),
+	Surface = Color3.fromRGB(35, 35, 35),
+	SurfaceUp = Color3.fromRGB(45, 45, 45),
+	Line = Color3.fromRGB(70, 70, 70),
+	Border = Color3.fromRGB(120, 120, 120),
+	Text = Color3.fromRGB(230, 230, 230),
+	Icon = Color3.fromRGB(200, 200, 200),
+	Faint = Color3.fromRGB(180, 180, 180),
+	On = Color3.fromRGB(255, 255, 255),
+	OnFill = Color3.fromRGB(60, 60, 60),
+}
+local COLORES_NEUTROS = {
+    ["White"] = true,
+    ["Medium stone grey"] = true,
+    ["Medium Stone Grey"] = true,
+    ["Really black"] = true,
+    ["Really Black"] = true,
+    ["Institutional white"] = true,
+    ["Institutional White"] = true,
+    ["Ghost grey"] = true,
+    ["Ghost Grey"] = true,
+}
+local function esColorVerde(c)
+    if typeof(c) ~= "Color3" then return false end
+    return c.G >= 0.55
+        and c.G > c.R
+        and c.G > c.B
+        and (c.G - c.R) >= 0.15
+        and (c.G - c.B) >= 0.15
+end
+local function guiTieneVerde(obj)
+    if not obj then return false end
+    local okBg, bg = pcall(function() return obj.BackgroundColor3 end)
+    if okBg and bg and esColorVerde(bg) then return true end
+    if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
+        local okT, tc = pcall(function() return obj.TextColor3 end)
+        if okT and tc and esColorVerde(tc) then return true end
+    end
+    if obj:IsA("ImageLabel") or obj:IsA("ImageButton") then
+        local okI, ic = pcall(function() return obj.ImageColor3 end)
+        if okI and ic and esColorVerde(ic) then return true end
+    end
+    return false
+end
+local function contenedorTieneVerde(container)
+    if not container then return false end
+    for _, desc in ipairs(container:GetDescendants()) do
+        if desc:IsA("GuiObject") and guiTieneVerde(desc) then
+            return true
+        end
+        if desc:IsA("Highlight") then
+            if esColorVerde(desc.FillColor) or esColorVerde(desc.OutlineColor) then
+                return true
+            end
+        end
+        if desc:IsA("ParticleEmitter") then
+            local ok, cs = pcall(function() return desc.Color end)
+            if ok and cs then
+                local c0 = cs.Keypoints and cs.Keypoints[1] and cs.Keypoints[1].Value
+                if c0 and esColorVerde(c0) then return true end
+            end
+        end
+        if desc:IsA("PointLight") or desc:IsA("SpotLight") then
+            local ok, c = pcall(function() return desc.Color end)
+            if ok and esColorVerde(c) then return true end
+        end
+        if desc:IsA("BillboardGui") then
+            for _, sub in ipairs(desc:GetDescendants()) do
+                if sub:IsA("GuiObject") and guiTieneVerde(sub) then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+local marcaAliadoCache = {}
+local MARCA_CACHE_TTL = 1.0
+local function invalidarMarcaAliado(targetPlayer)
+    if targetPlayer then
+        marcaAliadoCache[targetPlayer] = nil
+    end
+end
+local ATTRS_ALIADO = {
+    "IsAlly", "Ally", "AllyMarker", "isAlly", "is_ally", "ally",
+    "Teammate", "isTeammate", "is_teammate", "IsTeammate",
+    "Friendly", "isFriendly", "IsFriendly", "is_friendly"
+}
+local function tieneMarcaAliado(targetPlayer)
+    if not targetPlayer then return false end
+    local now = os.clock()
+    local cached = marcaAliadoCache[targetPlayer]
+    if cached and (now - cached.time) < MARCA_CACHE_TTL then
+        return cached.value
+    end
+    local resultado = false
+    local char = targetPlayer.Character
+    for _, attrName in ipairs(ATTRS_ALIADO) do
+        local v1 = targetPlayer:GetAttribute(attrName)
+        if v1 == true or v1 == "true" or v1 == "Ally" or v1 == "ally" then
+            resultado = true
+            break
+        end
+        if char then
+            local v2 = char:GetAttribute(attrName)
+            if v2 == true or v2 == "true" or v2 == "Ally" or v2 == "ally" then
+                resultado = true
+                break
+            end
+        end
+    end
+    if not resultado then
+        local myAttr = localPlayer:GetAttribute("Team") or localPlayer:GetAttribute("team")
+        local otherAttr = targetPlayer:GetAttribute("Team") or targetPlayer:GetAttribute("team")
+        if myAttr ~= nil and otherAttr ~= nil and myAttr ~= "" and otherAttr ~= "" and myAttr == otherAttr then
+            resultado = true
+        end
+    end
+    if not resultado and char then
+        local head = char:FindFirstChild("Head")
+        if head then
+            for _, child in ipairs(head:GetChildren()) do
+                if child:IsA("BillboardGui") and contenedorTieneVerde(child) then
+                    resultado = true
+                    break
+                end
+                if child:IsA("Highlight") and (esColorVerde(child.FillColor) or esColorVerde(child.OutlineColor)) then
+                    resultado = true
+                    break
+                end
+                if child:IsA("Attachment") and contenedorTieneVerde(child) then
+                    resultado = true
+                    break
+                end
+            end
+        end
+    end
+    if not resultado and char then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            for _, child in ipairs(hrp:GetChildren()) do
+                if child:IsA("BillboardGui") and contenedorTieneVerde(child) then
+                    resultado = true
+                    break
+                end
+                if child:IsA("Attachment") and contenedorTieneVerde(child) then
+                    resultado = true
+                    break
+                end
+                if child:IsA("Highlight") and (esColorVerde(child.FillColor) or esColorVerde(child.OutlineColor)) then
+                    resultado = true
+                    break
+                end
+            end
+        end
+    end
+    if not resultado and char then
+        for _, child in ipairs(char:GetChildren()) do
+            if child:IsA("Highlight") then
+                if esColorVerde(child.FillColor) or esColorVerde(child.OutlineColor) then
+                    resultado = true
+                    break
+                end
+            end
+        end
+    end
+    if not resultado and char then
+        local head = char:FindFirstChild("Head")
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if head and contenedorTieneVerde(head) then
+            resultado = true
+        end
+        if not resultado and hrp and contenedorTieneVerde(hrp) then
+            resultado = true
+        end
+    end
+    marcaAliadoCache[targetPlayer] = {
+        value = resultado,
+        time = now
+    }
+    return resultado
+end
+local function isEnemy(targetPlayer)
+    if not targetPlayer or targetPlayer == localPlayer then return false end
+    if tieneMarcaAliado(targetPlayer) then return false end
+    if not teamCheckEnabled then return true end
+    local myColorName = localPlayer.TeamColor and localPlayer.TeamColor.Name or "White"
+    local otherColorName = targetPlayer.TeamColor and targetPlayer.TeamColor.Name or "White"
+    local myColorNeutral = COLORES_NEUTROS[myColorName] == true
+    local otherColorNeutral = COLORES_NEUTROS[otherColorName] == true
+    if not myColorNeutral and not otherColorNeutral then
+        return localPlayer.TeamColor ~= targetPlayer.TeamColor
+    end
+    if localPlayer.Team ~= nil and targetPlayer.Team ~= nil then
+        return localPlayer.Team ~= targetPlayer.Team
+    end
+    local myAttr = localPlayer:GetAttribute("Team") or localPlayer:GetAttribute("team")
+    local otherAttr = targetPlayer:GetAttribute("Team") or targetPlayer:GetAttribute("team")
+    if myAttr ~= nil and otherAttr ~= nil and myAttr ~= "" and otherAttr ~= "" then
+        return myAttr ~= otherAttr
+    end
+    return true
+end
+local function esCompaneroDeEquipo(targetPlayer)
+    if not targetPlayer or targetPlayer == localPlayer then return true end
+    local myColor = localPlayer.TeamColor
+    local otherColor = targetPlayer.TeamColor
+    if myColor and otherColor then
+        local myName = myColor.Name
+        local otherName = otherColor.Name
+        local myNeutral = COLORES_NEUTROS[myName] == true
+        local otherNeutral = COLORES_NEUTROS[otherName] == true
+        if not myNeutral and not otherNeutral then
+            return myColor == otherColor
+        end
+    end
+    if localPlayer.Team and targetPlayer.Team then
+        return localPlayer.Team == targetPlayer.Team
+    end
+    local myAttr = localPlayer:GetAttribute("Team") or localPlayer:GetAttribute("team")
+    local otherAttr = targetPlayer:GetAttribute("Team") or targetPlayer:GetAttribute("team")
+    if myAttr and otherAttr and myAttr ~= "" and otherAttr ~= "" then
+        return myAttr == otherAttr
+    end
+    return false
+end
+local function esEnemigoValido(targetPlayer)
+    if not targetPlayer or targetPlayer == localPlayer then return false end
+    if not isEnemy(targetPlayer) then return false end
+    local char = targetPlayer.Character
+    if not char then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    if char:FindFirstChildOfClass("ForceField") then return false end
+    if targetPlayer.Team then
+        local tName = string.lower(targetPlayer.Team.Name)
+        if string.find(tName, "lobby") or string.find(tName, "spectat") or string.find(tName, "espectador") or string.find(tName, "menu") or string.find(tName, "dead") then
+            return false
+        end
+    end
+    return true
+end
+local function IsInMatchStrict()
+    local gui = localPlayer:FindFirstChild("PlayerGui")
+    if not gui then return false end
+    local main = gui:FindFirstChild("Main") or gui
+    local gameFrame = main:FindFirstChild("MainGameFrame")
+    if not gameFrame or not gameFrame.Visible then return false end
+    local score = gameFrame:FindFirstChild("IngameScore")
+    local timer = score and score:FindFirstChild("Timer")
+    if not timer then return false end
+    if not (timer:IsA("TextLabel") or timer:IsA("TextButton") or timer:IsA("TextBox")) then return false end
+    local txt = tostring(timer.Text or ""):gsub("%s", "")
+    if txt == "" or string.find(txt, "-") or txt == "0:00" or txt == "00:00" or txt == "0:0" then return false end
+    return txt:match("^%d+:%d%d$") ~= nil
+end
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= localPlayer then p.CharacterAdded:Connect(function() invalidarMarcaAliado(p) end) end
+end
+Players.PlayerAdded:Connect(function(p)
+    if p ~= localPlayer then p.CharacterAdded:Connect(function() invalidarMarcaAliado(p) end) end
+end)
+Players.PlayerRemoving:Connect(function(p) invalidarMarcaAliado(p) end)
+localPlayer.CharacterAdded:Connect(function() table.clear(marcaAliadoCache) end)
+local ConnectionManager = {}
+ConnectionManager.__index = ConnectionManager
+function ConnectionManager.new() return setmetatable({ Items = {} }, ConnectionManager) end
+function ConnectionManager:Add(task) self.Items[#self.Items + 1] = task; return task end
+function ConnectionManager:Cleanup()
+    for i = #self.Items, 1, -1 do
+        local item = self.Items[i]
+        self.Items[i] = nil
+        local t = typeof(item)
+        if t == "RBXScriptConnection" then pcall(function() item:Disconnect() end)
+        elseif t == "Instance" then pcall(function() item:Destroy() end)
+        elseif t == "function" then pcall(item) end
+    end
+end
+
+local KILLALL_MOVE_SPEED = 40
+local KILLALL_APPROACH_DISTANCE = 1.5
+local KILLALL_SWING_INTERVAL = 0.3
+local KILLALL_SAFE_GROUND_THRESHOLD = 3
+local KILLALL_STICK_MAX_TIME = 2.5
+local KILLALL_BELOW_HEIGHT = 12
+local KILLALL_TRIGGER_RADIUS = 20
+local KILLALL_ARRIVE_DIST = 2.5
+
+local KillAll = {}
+KillAll.__index = KillAll
+
+function KillAll.new()
+    return setmetatable({
+        running = false,
+        connections = ConnectionManager.new(),
+        savedCollisions = {},
+        swingAccumulator = 0,
+        safePosition = nil,
+        sticking = false,
+        stickingStartTime = 0,
+        currentTarget = nil,
+        lockedTargetPlayer = nil,
+        lastStickTarget = nil,
+        lastStickTargetHum = nil,
+        tappedScreen = false,
+    }, KillAll)
+end
+
+function KillAll:DisableCollisions()
+    local char = localPlayer.Character
+    if not char then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.CanCollide then
+            if self.savedCollisions[part] == nil then
+                self.savedCollisions[part] = part.CanCollide
+            end
+            part.CanCollide = false
+        end
+    end
+end
+
+function KillAll:RestoreCollisions()
+    for part, value in pairs(self.savedCollisions) do
+        if part.Parent then pcall(function() part.CanCollide = value end) end
+    end
+    table.clear(self.savedCollisions)
+end
+
+function KillAll:GetRoot(p)
+    local char = p and p.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+function KillAll:GetHumanoid(p)
+    local char = p and p.Character
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+function KillAll:IsLockedTargetValid()
+    local lp = self.lockedTargetPlayer
+    if not lp or not lp.Parent or not esEnemigoValido(lp) then return false end
+    local char = lp.Character
+    if not char then return false end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return false end
+    return root
+end
+
+function KillAll:GetClosestEnemy()
+    local myRoot = self:GetRoot(localPlayer)
+    if not myRoot then return nil end
+    local lockedRoot = self:IsLockedTargetValid()
+    if lockedRoot then return lockedRoot end
+    self.lockedTargetPlayer = nil
+    self.currentTarget = nil
+    local best, bestDist, bestPlayer = nil, nil, nil
+    for _, other in ipairs(Players:GetPlayers()) do
+        if other ~= localPlayer and esEnemigoValido(other) then
+            local hum = self:GetHumanoid(other)
+            local root = self:GetRoot(other)
+            if root and hum and hum.Health > 0 then
+                local dist = (root.Position - myRoot.Position).Magnitude
+                if not bestDist or dist < bestDist then
+                    best, bestDist, bestPlayer = root, dist, other
+                end
+            end
+        end
+    end
+    if bestPlayer then self.lockedTargetPlayer = bestPlayer end
+    return best
+end
+
+function KillAll:IsInMatch() return IsInMatchStrict() end
+
+function KillAll:FlyMoveTo(myRoot, goalPos, facePos)
+    if not myRoot or not goalPos then return false end
+    local delta = goalPos - myRoot.Position
+    local dist = delta.Magnitude
+
+    if facePos then
+        local look = Vector3.new(facePos.X, myRoot.Position.Y, facePos.Z)
+        if (look - myRoot.Position).Magnitude > 0.05 then
+            pcall(function()
+                myRoot.CFrame = CFrame.lookAt(myRoot.Position, look)
+            end)
+        end
+    end
+
+    if dist < KILLALL_ARRIVE_DIST then
+        myRoot.Anchored = true
+        myRoot.AssemblyLinearVelocity = Vector3.zero
+        myRoot.AssemblyAngularVelocity = Vector3.zero
+        return true
+    end
+
+    if myRoot.Anchored then
+        myRoot.Anchored = false
+    end
+    myRoot.AssemblyLinearVelocity = delta.Unit * KILLALL_MOVE_SPEED
+    myRoot.AssemblyAngularVelocity = Vector3.zero
+    return false
+end
+
+function KillAll:ResetState()
+    self.sticking = false
+    self.stickingStartTime = 0
+    self.swingAccumulator = 0
+    self.lockedTargetPlayer = nil
+    self.currentTarget = nil
+    self.tappedScreen = false
+    local myRoot = self:GetRoot(localPlayer)
+    if myRoot then
+        pcall(function() myRoot.Anchored = false end)
+    end
+    self:RestoreCollisions()
+    local hum = self:GetHumanoid(localPlayer)
+    if hum and hum.PlatformStand then pcall(function() hum.PlatformStand = false end) end
+end
+
+function KillAll:ReturnToSafePosition(myRoot)
+    if not self.safePosition or not myRoot then return end
+    if myRoot.Position.Y < (self.safePosition.Y - KILLALL_SAFE_GROUND_THRESHOLD) then
+        self:FlyMoveTo(myRoot, self.safePosition, self.safePosition + myRoot.CFrame.LookVector)
+    end
+end
+
+function KillAll:IsKnife(tool)
+    if not (tool and tool:IsA("Tool")) then return false end
+    if tool:FindFirstChild("fire") or tool:FindFirstChild("showBeam") then return false end
+    return tool:FindFirstChild("Slash") ~= nil or tool:FindFirstChild("SlashStart") ~= nil or tool:FindFirstChild("Handle") ~= nil
+end
+
+function KillAll:FindKnife()
+    local char = localPlayer.Character
+    if char then
+        for _, child in ipairs(char:GetChildren()) do
+            if self:IsKnife(child) then return child, true end
+        end
+    end
+    local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+    if backpack then
+        for _, child in ipairs(backpack:GetChildren()) do
+            if self:IsKnife(child) then return child, false end
+        end
+    end
+    return nil, false
+end
+
+function KillAll:EnsureKnifeEquipped()
+    local tool, equipped = self:FindKnife()
+    if not tool then return nil end
+    if not equipped then
+        local hum = self:GetHumanoid(localPlayer)
+        if hum then
+            pcall(function() hum:EquipTool(tool) end)
+        end
+    end
+    return tool
+end
+
+function KillAll:SwingKnife(dt, targetRoot)
+    self.swingAccumulator = self.swingAccumulator + dt
+    if self.swingAccumulator < KILLALL_SWING_INTERVAL then return end
+    self.swingAccumulator = 0
+    local tool = self:EnsureKnifeEquipped()
+    if not tool then return end
+    local handle = tool:FindFirstChild("Handle")
+    if handle and targetRoot then
+        if firetouchinterest then
+            pcall(function()
+                firetouchinterest(handle, targetRoot, 0)
+                firetouchinterest(handle, targetRoot, 1)
+            end)
+        end
+    end
+    if elremotelistope then
+        pcall(function()
+            elremotelistope:FireServer(PRIMERARG1)
+        end)
+    else
+        pcall(function()
+            tool:Activate()
+        end)
+    end
+end
+
+function KillAll:GetBelowPos(targetRoot)
+    return Vector3.new(targetRoot.Position.X, targetRoot.Position.Y - KILLALL_BELOW_HEIGHT, targetRoot.Position.Z)
+end
+
+function KillAll:GetStickPos(targetRoot)
+    local targetPos = targetRoot.Position
+    return targetPos - Vector3.new(0, KILLALL_APPROACH_DISTANCE, 0), targetPos
+end
+
+function KillAll:ApproachTarget(myRoot, targetRoot)
+    self:EnsureKnifeEquipped()
+    local myPos = myRoot.Position
+    local targetPos = targetRoot.Position
+    local deltaXZ = Vector3.new(targetPos.X - myPos.X, 0, targetPos.Z - myPos.Z)
+    local hDist = deltaXZ.Magnitude
+
+    if hDist <= KILLALL_TRIGGER_RADIUS then
+        if not self.sticking then
+            self.sticking = true
+            self.stickingStartTime = os.clock()
+            self.lastStickTarget = targetRoot
+            local hum = self:GetHumanoid(targetRoot.Parent)
+            self.lastStickTargetHum = hum
+        end
+        return
+    end
+
+    local goal = self:GetBelowPos(targetRoot)
+    self:FlyMoveTo(myRoot, goal, targetPos)
+end
+
+function KillAll:StickToTarget(myRoot, targetRoot)
+    self:EnsureKnifeEquipped()
+    local stickPos, facePos = self:GetStickPos(targetRoot)
+    self:FlyMoveTo(myRoot, stickPos, facePos)
+end
+
+function KillAll:Update(dt)
+    if not self:IsInMatch() then
+        self:ResetState()
+        return
+    end
+    local myRoot = self:GetRoot(localPlayer)
+    if not myRoot then self:ResetState(); return end
+    if self.lastStickTargetHum then
+        local hum = self.lastStickTargetHum
+        if not hum.Parent or hum.Health <= 0 then
+            self.lastStickTargetHum = nil
+            self.lastStickTarget = nil
+            self.sticking = false
+            self.lockedTargetPlayer = nil
+            self.tappedScreen = false
+            if myRoot.Anchored then myRoot.Anchored = false end
+            return
+        end
+    end
+    local target = self:GetClosestEnemy()
+    if not target then
+        self:ReturnToSafePosition(myRoot)
+        self:ResetState()
+        return
+    end
+    self:DisableCollisions()
+    local hum = self:GetHumanoid(localPlayer)
+    if hum and not hum.PlatformStand then pcall(function() hum.PlatformStand = true end) end
+
+    if self.sticking then
+        if target ~= self.lastStickTarget or (os.clock() - self.stickingStartTime) > KILLALL_STICK_MAX_TIME then
+            self.sticking = false
+            self.tappedScreen = false
+            if myRoot.Anchored then myRoot.Anchored = false end
+        else
+            self:StickToTarget(myRoot, target)
+            self:SwingKnife(dt or 0, target)
+            return
+        end
+    end
+    self:ApproachTarget(myRoot, target)
+end
+
+function KillAll:Start()
+    if self.running then return end
+    self.running = true
+    KillAllEnabled = true
+    local myRoot = self:GetRoot(localPlayer)
+    self.safePosition = myRoot and myRoot.Position or nil
+    self.connections:Add(RunService.Heartbeat:Connect(function(dt)
+        if self.running then self:Update(dt) end
+    end))
+end
+
+function KillAll:Stop()
+    self.running = false
+    KillAllEnabled = false
+    self.connections:Cleanup()
+    self.connections = ConnectionManager.new()
+    local myRoot = self:GetRoot(localPlayer)
+    if myRoot then
+        pcall(function() myRoot.Anchored = false end)
+        if self.safePosition then
+            pcall(function()
+                myRoot.CFrame = CFrame.new(self.safePosition)
+                myRoot.AssemblyLinearVelocity = Vector3.zero
+                myRoot.AssemblyAngularVelocity = Vector3.zero
+            end)
+        end
+    end
+    self:ResetState()
+end
+
+local KillAllInstance = KillAll.new()
+local function setKillAllEnabled(value)
+    KillAllEnabled = value == true
+    if KillAllEnabled then
+        KillAllInstance:Start()
+    else
+        KillAllInstance:Stop()
+    end
+end
+local v3 = gethui and gethui() or CoreGui
+local oldMenu = v3:FindFirstChild("XitadosKillAllMenu") or localPlayer.PlayerGui:FindFirstChild("XitadosKillAllMenu")
+if oldMenu then oldMenu:Destroy() end
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "XitadosKillAllMenu"
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.DisplayOrder = 2147483647
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = v3
+local Frame = Instance.new("Frame")
+Frame.AnchorPoint = Vector2.new(0.5, 0.5)
+Frame.Position = UDim2.fromScale(0.5, 0.5)
+Frame.Size = UDim2.fromOffset(320, 180)
+Frame.BackgroundColor3 = tbl.Background
+Frame.BorderSizePixel = 0
+Frame.Active = true
+Frame.Parent = screenGui
+local uiCorner = Instance.new("UICorner")
+uiCorner.CornerRadius = UDim.new(0, 16)
+uiCorner.Parent = Frame
+local uiStroke = Instance.new("UIStroke")
+uiStroke.Color = tbl.Border
+uiStroke.Thickness = 1
+uiStroke.Transparency = 0.2
+uiStroke.Parent = Frame
+local uiGradient = Instance.new("UIGradient")
+uiGradient.Color = ColorSequence.new(tbl.BackgroundAlt, tbl.Background)
+uiGradient.Rotation = 90
+uiGradient.Parent = Frame
+local topBar = Instance.new("Frame")
+topBar.Size = UDim2.new(1, 0, 0, 52)
+topBar.BackgroundTransparency = 1
+topBar.Parent = Frame
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Position = UDim2.fromOffset(18, 15)
+titleLabel.Size = UDim2.fromOffset(160, 22)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.Text = "Xitados"
+titleLabel.TextSize = 17
+titleLabel.TextColor3 = tbl.Text
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = topBar
+local line = Instance.new("Frame")
+line.Position = UDim2.fromOffset(0, 52)
+line.Size = UDim2.new(1, 0, 0, 1)
+line.BackgroundColor3 = tbl.Line
+line.BorderSizePixel = 0
+line.Parent = Frame
+local minBtn = Instance.new("TextButton")
+minBtn.AnchorPoint = Vector2.new(1, 0)
+minBtn.Position = UDim2.new(1, -44, 0, 13)
+minBtn.Size = UDim2.fromOffset(26, 26)
+minBtn.BackgroundColor3 = tbl.Surface
+minBtn.BorderSizePixel = 0
+minBtn.Font = Enum.Font.GothamBold
+minBtn.Text = "—"
+minBtn.TextSize = 12
+minBtn.TextColor3 = tbl.Icon
+minBtn.Parent = topBar
+local minCorner = Instance.new("UICorner")
+minCorner.CornerRadius = UDim.new(0, 8)
+minCorner.Parent = minBtn
+local closeBtn = Instance.new("TextButton")
+closeBtn.AnchorPoint = Vector2.new(1, 0)
+closeBtn.Position = UDim2.new(1, -14, 0, 13)
+closeBtn.Size = UDim2.fromOffset(26, 26)
+closeBtn.BackgroundColor3 = tbl.Surface
+closeBtn.BorderSizePixel = 0
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Text = "✕"
+closeBtn.TextSize = 12
+closeBtn.TextColor3 = tbl.Icon
+closeBtn.Parent = topBar
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 8)
+closeCorner.Parent = closeBtn
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Position = UDim2.fromOffset(18, 68)
+toggleBtn.Size = UDim2.new(1, -36, 0, 36)
+toggleBtn.BackgroundColor3 = tbl.Surface
+toggleBtn.BorderSizePixel = 0
+toggleBtn.AutoButtonColor = true
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.Text = "AutoKill: OFF"
+toggleBtn.TextSize = 13
+toggleBtn.TextColor3 = tbl.Icon
+toggleBtn.Parent = Frame
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0, 8)
+toggleCorner.Parent = toggleBtn
+local warningLabel = Instance.new("TextLabel")
+warningLabel.Position = UDim2.fromOffset(18, 114)
+warningLabel.Size = UDim2.new(1, -36, 0, 50)
+warningLabel.BackgroundTransparency = 1
+warningLabel.Font = Enum.Font.Gotham
+warningLabel.Text = "si se empieza a laguear apagalo y prendelo de nuevo si no funciona no lo uses"
+warningLabel.TextSize = 11
+warningLabel.TextColor3 = Color3.fromRGB(255, 170, 0)
+warningLabel.TextWrapped = true
+warningLabel.TextYAlignment = Enum.TextYAlignment.Top
+warningLabel.Parent = Frame
+local minFloatBtn = Instance.new("TextButton")
+minFloatBtn.AnchorPoint = Vector2.new(0.5, 0.5)
+minFloatBtn.Size = UDim2.fromOffset(46, 46)
+minFloatBtn.BackgroundColor3 = tbl.Background
+minFloatBtn.BorderSizePixel = 0
+minFloatBtn.Font = Enum.Font.GothamBold
+minFloatBtn.Text = "X"
+minFloatBtn.TextSize = 18
+minFloatBtn.TextColor3 = tbl.Text
+minFloatBtn.Visible = false
+minFloatBtn.Parent = screenGui
+local floatCorner = Instance.new("UICorner")
+floatCorner.CornerRadius = UDim.new(0, 23)
+floatCorner.Parent = minFloatBtn
+local floatStroke = Instance.new("UIStroke")
+floatStroke.Color = tbl.Border
+floatStroke.Thickness = 1.5
+floatStroke.Transparency = 0.1
+floatStroke.Parent = minFloatBtn
+minBtn.Activated:Connect(function()
+	Frame.Visible = false
+	minFloatBtn.Position = UDim2.fromOffset(Frame.AbsolutePosition.X + 23, Frame.AbsolutePosition.Y + 23)
+	minFloatBtn.Visible = true
+end)
+closeBtn.Activated:Connect(function()
+	setKillAllEnabled(false)
+	screenGui:Destroy()
+end)
+toggleBtn.Activated:Connect(function()
+    local newState = not KillAllEnabled
+    setKillAllEnabled(newState)
+    if newState then
+        toggleBtn.Text = "AutoKill: ON"
+        toggleBtn.BackgroundColor3 = tbl.OnFill
+        toggleBtn.TextColor3 = tbl.On
+    else
+        toggleBtn.Text = "AutoKill: OFF"
+        toggleBtn.BackgroundColor3 = tbl.Surface
+        toggleBtn.TextColor3 = tbl.Icon
+    end
+end)
+local dragging, dragStart, startPos
+topBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = Frame.Position
+	end
+end)
+topBar.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+	end
+end)
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		local delta = input.Position - dragStart
+		Frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+	end
+end)
+local floatDragging, floatDragStart, floatStartPos, floatMoved = false, nil, nil, false
+minFloatBtn.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		floatDragging = true
+		floatMoved = false
+		floatDragStart = input.Position
+		floatStartPos = minFloatBtn.Position
+	end
+end)
+UserInputService.InputChanged:Connect(function(input)
+	if floatDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		local delta = input.Position - floatDragStart
+		if delta.Magnitude > 5 then
+			floatMoved = true
+			minFloatBtn.Position = UDim2.new(floatStartPos.X.Scale, floatStartPos.X.Offset + delta.X, floatStartPos.Y.Scale, floatStartPos.Y.Offset + delta.Y)
+		end
+	end
+end)
+minFloatBtn.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		floatDragging = false
+		if not floatMoved then
+			minFloatBtn.Visible = false
+			Frame.Visible = true
+		end
+	end
+end)
