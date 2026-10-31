@@ -1,0 +1,491 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local PhysicsService = game:GetService("PhysicsService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local isInvisible = false
+local character, humanoid, rootPart
+local characterParts = {}
+local invisibleHeartbeatConnection = nil
+local invisibleWalkSpeed = 16
+
+local GROUP_INVISIBLE = "InvisiblePlayer"
+local GROUP_OTHERS    = "OtherPlayers"
+local collisionGroupsReady = false
+
+local INVISIBLE_ALTITUDE = 4000
+
+local invisibleVisualClone           = nil
+local invisibleVisualRoot            = nil
+local invisibleOriginalPosition      = nil
+local invisibleOriginalAutoRotate    = nil
+local invisibleOriginalPlatformStand = nil
+local invisibleOriginalJumpHeight    = nil
+local invisibleOriginalJumpPower     = nil
+local invisibleFallVelocity          = 0
+local invisibleLastGroundCheck       = os.clock()
+local invisibleGroundOffset          = nil
+local invisibleEnabled               = false
+
+local LANDING_LERP_SPEED = 6
+
+local function setupCollisionGroups()
+    if collisionGroupsReady then return end
+    pcall(function() PhysicsService:RegisterCollisionGroup(GROUP_INVISIBLE) end)
+    pcall(function() PhysicsService:RegisterCollisionGroup(GROUP_OTHERS) end)
+    pcall(function()
+        PhysicsService:CollisionGroupSetCollidable(GROUP_INVISIBLE, GROUP_OTHERS, false)
+    end)
+    collisionGroupsReady = true
+end
+
+local function assignGroupToCharacter(char, groupName)
+    if not char then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            pcall(function() PhysicsService:SetPartCollisionGroup(part, groupName) end)
+        end
+    end
+    char.DescendantAdded:Connect(function(obj)
+        if obj:IsA("BasePart") then
+            pcall(function() PhysicsService:SetPartCollisionGroup(obj, groupName) end)
+        end
+    end)
+end
+
+local function resetGroupOnCharacter(char)
+    if not char then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            pcall(function() PhysicsService:SetPartCollisionGroup(part, "Default") end)
+        end
+    end
+end
+
+local function tagOtherPlayers()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            assignGroupToCharacter(p.Character, GROUP_OTHERS)
+        end
+        p.CharacterAdded:Connect(function(char)
+            if p ~= player then
+                task.wait(0.1)
+                assignGroupToCharacter(char, GROUP_OTHERS)
+            end
+        end)
+    end
+end
+
+Players.PlayerAdded:Connect(function(p)
+    if p == player then return end
+    p.CharacterAdded:Connect(function(char)
+        task.wait(0.1)
+        assignGroupToCharacter(char, GROUP_OTHERS)
+    end)
+end)
+
+local invisibleGui = Instance.new("ScreenGui")
+invisibleGui.Name = "ClanxitadosInvisibleButton"
+invisibleGui.ResetOnSpawn = false
+invisibleGui.IgnoreGuiInset = true
+invisibleGui.DisplayOrder = 1000
+invisibleGui.Parent = playerGui
+
+local invisibleButton = Instance.new("TextButton")
+invisibleButton.Name = "InvisibleToggle"
+invisibleButton.Size = UDim2.fromOffset(150, 36)
+invisibleButton.Position = UDim2.new(0.5, -75, 0.16, 0)
+invisibleButton.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+invisibleButton.BackgroundTransparency = 0.15
+invisibleButton.Text = "Invisible : Off"
+invisibleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+invisibleButton.Font = Enum.Font.GothamBold
+invisibleButton.TextSize = 14
+invisibleButton.AutoButtonColor = false
+invisibleButton.Visible = true
+invisibleButton.Parent = invisibleGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 6)
+corner.Parent = invisibleButton
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(170, 170, 170)
+stroke.Transparency = 0.45
+stroke.Thickness = 1
+stroke.Parent = invisibleButton
+
+local function makeDraggable(frame, handle, onClick)
+    local dragging = false
+    local dragStartPos, frameStartPos
+    local wasDragged = false
+
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging      = true
+            wasDragged    = false
+            dragStartPos  = input.Position
+            frameStartPos = frame.Position
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (
+            input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch
+        ) then
+            local delta = input.Position - dragStartPos
+            if delta.Magnitude > 4 then wasDragged = true end
+            frame.Position = UDim2.new(
+                frameStartPos.X.Scale,
+                frameStartPos.X.Offset + delta.X,
+                frameStartPos.Y.Scale,
+                frameStartPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    handle.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+            if not wasDragged then onClick() end
+        end
+    end)
+end
+
+local function updateCharacterReferences()
+    character = player.Character
+    if not character then return end
+    humanoid  = character:FindFirstChildOfClass("Humanoid")
+    rootPart  = character:FindFirstChild("HumanoidRootPart")
+    characterParts = {}
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+            table.insert(characterParts, part)
+        end
+    end
+end
+
+local function applyTransparency(state)
+    for _, part in ipairs(characterParts) do
+        if part and part.Parent then
+            pcall(function() part.Transparency = state and 0.5 or 0 end)
+        end
+    end
+end
+
+local function destroyInvisibleVisual()
+    if invisibleVisualClone then
+        pcall(function() invisibleVisualClone:Destroy() end)
+        invisibleVisualClone = nil
+        invisibleVisualRoot  = nil
+    end
+end
+
+local function createInvisibleVisual()
+    destroyInvisibleVisual()
+    if not character or not character.Parent then return end
+
+    local oldArchivable = character.Archivable
+    pcall(function() character.Archivable = true end)
+    local clone
+    pcall(function() clone = character:Clone() end)
+    pcall(function() character.Archivable = oldArchivable end)
+    if not clone then return end
+
+    clone.Name = "ClanxitadosInvisibleVisual"
+    for _, obj in ipairs(clone:GetDescendants()) do
+        if obj:IsA("Script") or obj:IsA("LocalScript") then
+            obj:Destroy()
+        elseif obj:IsA("BasePart") then
+            obj.CanCollide = false
+            obj.CanTouch   = false
+            obj.CanQuery   = false
+            obj.Massless   = true
+        end
+    end
+
+    local cloneHumanoid = clone:FindFirstChildOfClass("Humanoid")
+    if cloneHumanoid then
+        cloneHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+        cloneHumanoid.HealthDisplayType   = Enum.HumanoidHealthDisplayType.AlwaysOff
+        cloneHumanoid.NameDisplayDistance = 0
+        pcall(function() cloneHumanoid:ChangeState(Enum.HumanoidStateType.Physics) end)
+    end
+
+    local cloneRoot = clone:FindFirstChild("HumanoidRootPart")
+    if not cloneRoot then clone:Destroy() return end
+
+    clone.Parent         = workspace
+    invisibleVisualClone = clone
+    invisibleVisualRoot  = cloneRoot
+
+    local cam = workspace.CurrentCamera
+    if cloneHumanoid and cam then
+        pcall(function() cam.CameraSubject = cloneHumanoid end)
+    end
+
+    local basePosition = invisibleOriginalPosition or rootPart.Position
+    clone:PivotTo(CFrame.new(basePosition) * (rootPart.CFrame - rootPart.Position))
+
+    invisibleFallVelocity    = 0
+    invisibleLastGroundCheck = os.clock()
+
+    for _, obj in ipairs(clone:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            obj.Anchored = (obj == cloneRoot)
+        end
+    end
+end
+
+local smoothVisualY = nil
+
+local function mirrorInvisiblePose()
+    if not invisibleVisualClone or not invisibleVisualClone.Parent or not character then return end
+
+    local realRoot = character:FindFirstChild("HumanoidRootPart")
+    if not realRoot or not invisibleVisualRoot then return end
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = { character, invisibleVisualClone }
+    rayParams.IgnoreWater = false
+
+    local currentVisualPos = invisibleVisualRoot.Position
+    local now = os.clock()
+    local dt  = math.clamp(now - (invisibleLastGroundCheck or now), 0, 0.1)
+    invisibleLastGroundCheck = now
+
+    local origin    = Vector3.new(currentVisualPos.X, currentVisualPos.Y + 2.5, currentVisualPos.Z)
+    local groundHit = workspace:Raycast(origin, Vector3.new(0, -6000, 0), rayParams)
+
+    local targetY = currentVisualPos.Y
+
+    if groundHit then
+        if invisibleGroundOffset == nil then
+            local initParams = RaycastParams.new()
+            initParams.FilterType = Enum.RaycastFilterType.Exclude
+            initParams.FilterDescendantsInstances = { character, invisibleVisualClone }
+            local initHit = workspace:Raycast(
+                Vector3.new(invisibleOriginalPosition.X, invisibleOriginalPosition.Y + 2.5, invisibleOriginalPosition.Z),
+                Vector3.new(0, -6000, 0),
+                initParams
+            )
+            invisibleGroundOffset = initHit and (invisibleOriginalPosition.Y - initHit.Position.Y) or 3
+        end
+
+        local desiredY = groundHit.Position.Y + (invisibleGroundOffset or 3)
+        if smoothVisualY == nil then smoothVisualY = desiredY end
+        smoothVisualY = smoothVisualY + (desiredY - smoothVisualY) * math.min(dt * LANDING_LERP_SPEED, 1)
+        targetY = smoothVisualY
+        invisibleFallVelocity = 0
+    else
+        invisibleFallVelocity = math.min((invisibleFallVelocity or 0) + 110 * dt, 180)
+        targetY               = currentVisualPos.Y - invisibleFallVelocity * dt
+        smoothVisualY         = targetY
+    end
+
+    local targetPosition = Vector3.new(realRoot.Position.X, targetY, realRoot.Position.Z)
+    invisibleVisualClone:PivotTo(CFrame.new(targetPosition) * (realRoot.CFrame - realRoot.Position))
+
+    local realMotors = {}
+    for _, obj in ipairs(character:GetDescendants()) do
+        if obj:IsA("Motor6D") then realMotors[obj.Name] = obj end
+    end
+    for _, obj in ipairs(invisibleVisualClone:GetDescendants()) do
+        if obj:IsA("Motor6D") then
+            local src = realMotors[obj.Name]
+            if src then pcall(function() obj.Transform = src.Transform end) end
+        end
+    end
+end
+
+local function startInvisibleFlight()
+    if invisibleHeartbeatConnection then
+        invisibleHeartbeatConnection:Disconnect()
+        invisibleHeartbeatConnection = nil
+    end
+
+    updateCharacterReferences()
+    if not character or not humanoid or not rootPart then return end
+
+    invisibleOriginalPosition      = rootPart.Position
+    invisibleOriginalAutoRotate    = humanoid.AutoRotate
+    invisibleOriginalPlatformStand = humanoid.PlatformStand
+    invisibleOriginalJumpHeight    = humanoid.JumpHeight
+    invisibleOriginalJumpPower     = humanoid.JumpPower
+    invisibleWalkSpeed             = math.max(humanoid.WalkSpeed, 16)
+
+    invisibleGroundOffset = nil
+    smoothVisualY         = nil
+
+    setupCollisionGroups()
+    assignGroupToCharacter(character, GROUP_INVISIBLE)
+    tagOtherPlayers()
+    createInvisibleVisual()
+
+    pcall(function()
+        rootPart.CFrame        = rootPart.CFrame + Vector3.new(0, INVISIBLE_ALTITUDE, 0)
+        humanoid.AutoRotate    = false
+        humanoid.PlatformStand = true
+        humanoid.JumpHeight    = 0
+        humanoid.JumpPower     = 0
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+    end)
+
+    invisibleHeartbeatConnection = RunService.Heartbeat:Connect(function()
+        if not isInvisible then return end
+        if not character or not character.Parent or not humanoid or not rootPart or humanoid.Health <= 0 then return end
+
+        if humanoid.JumpHeight ~= 0 then humanoid.JumpHeight = 0 end
+        if humanoid.JumpPower  ~= 0 then humanoid.JumpPower  = 0 end
+        pcall(function() humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false) end)
+
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+
+        local visualHumanoid = invisibleVisualClone and invisibleVisualClone:FindFirstChildOfClass("Humanoid")
+        if visualHumanoid and cam.CameraSubject ~= visualHumanoid then
+            pcall(function() cam.CameraSubject = visualHumanoid end)
+        end
+
+        local look      = cam.CFrame.LookVector
+        local right     = cam.CFrame.RightVector
+        local direction = Vector3.zero
+
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then direction += look  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then direction -= look  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then direction -= right end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then direction += right end
+
+        local horizontal = Vector3.new(direction.X, 0, direction.Z)
+        horizontal = horizontal.Magnitude > 0.01
+            and horizontal.Unit * invisibleWalkSpeed
+            or Vector3.zero
+
+        local current = rootPart.Position
+        local targetY = invisibleOriginalPosition.Y + INVISIBLE_ALTITUDE
+
+        rootPart.CFrame = CFrame.new(
+            Vector3.new(current.X, targetY, current.Z),
+            Vector3.new(current.X, targetY, current.Z) + Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
+        )
+
+        rootPart.AssemblyLinearVelocity  = Vector3.new(horizontal.X, 0, horizontal.Z)
+        rootPart.AssemblyAngularVelocity = Vector3.zero
+
+        mirrorInvisiblePose()
+    end)
+end
+
+local function stopInvisibleFlight()
+    if invisibleHeartbeatConnection then
+        invisibleHeartbeatConnection:Disconnect()
+        invisibleHeartbeatConnection = nil
+    end
+
+    destroyInvisibleVisual()
+    resetGroupOnCharacter(character)
+
+    invisibleGroundOffset = nil
+    smoothVisualY         = nil
+
+    local cam = workspace.CurrentCamera
+    if cam and humanoid and humanoid.Parent then
+        pcall(function() cam.CameraSubject = humanoid end)
+    end
+
+    if rootPart and rootPart.Parent and invisibleOriginalPosition then
+        local startY   = rootPart.Position.Y
+        local endY     = invisibleOriginalPosition.Y
+        local duration = 0.35
+        local elapsed  = 0
+
+        local landingConn
+        landingConn = RunService.Heartbeat:Connect(function(dt)
+            elapsed += dt
+            local alpha = math.min(elapsed / duration, 1)
+            local t     = 1 - (1 - alpha)^3
+
+            pcall(function()
+                rootPart.CFrame = CFrame.new(
+                    rootPart.Position.X,
+                    startY + (endY - startY) * t,
+                    rootPart.Position.Z
+                )
+                rootPart.AssemblyLinearVelocity  = Vector3.zero
+                rootPart.AssemblyAngularVelocity = Vector3.zero
+            end)
+
+            if alpha >= 1 then
+                landingConn:Disconnect()
+
+                if humanoid and humanoid.Parent then
+                    pcall(function()
+                        humanoid.PlatformStand = invisibleOriginalPlatformStand == true
+                        humanoid.AutoRotate    = invisibleOriginalAutoRotate ~= false
+                        
+                        if invisibleOriginalJumpHeight ~= nil then humanoid.JumpHeight = invisibleOriginalJumpHeight end
+                        if invisibleOriginalJumpPower  ~= nil then humanoid.JumpPower  = invisibleOriginalJumpPower  end
+                        humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+                        humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+                    end)
+                end
+
+                invisibleOriginalPosition      = nil
+                invisibleOriginalAutoRotate    = nil
+                invisibleOriginalPlatformStand = nil
+                invisibleOriginalJumpHeight    = nil
+                invisibleOriginalJumpPower     = nil
+            end
+        end)
+    end
+end
+
+local function updateInvisibleButton()
+    if isInvisible then
+        invisibleButton.Text             = "Invisible : On"
+        invisibleButton.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+    else
+        invisibleButton.Text             = "Invisible : Off"
+        invisibleButton.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+    end
+end
+
+local function setLocalInvisible(enabled)
+    isInvisible      = enabled == true
+    invisibleEnabled = isInvisible
+
+    updateCharacterReferences()
+    applyTransparency(isInvisible)
+
+    if isInvisible then
+        startInvisibleFlight()
+    else
+        stopInvisibleFlight()
+        applyTransparency(false)
+    end
+
+    updateInvisibleButton()
+end
+
+player.CharacterAdded:Connect(function()
+    isInvisible      = false
+    invisibleEnabled = false
+    stopInvisibleFlight()
+    task.wait(0.5)
+    updateCharacterReferences()
+    applyTransparency(false)
+    updateInvisibleButton()
+end)
+
+makeDraggable(invisibleButton, invisibleButton, function()
+    if invisibleButton.Visible then
+        setLocalInvisible(not isInvisible)
+    end
+end)
