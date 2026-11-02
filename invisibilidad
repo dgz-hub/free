@@ -29,6 +29,7 @@ local invisibleFallVelocity          = 0
 local invisibleLastGroundCheck       = os.clock()
 local invisibleGroundOffset          = nil
 local invisibleEnabled               = false
+local lastTrackedGroundPosition      = nil
 
 local LANDING_LERP_SPEED = 6
 
@@ -233,6 +234,8 @@ local function createInvisibleVisual()
     local basePosition = invisibleOriginalPosition or rootPart.Position
     clone:PivotTo(CFrame.new(basePosition) * (rootPart.CFrame - rootPart.Position))
 
+    lastTrackedGroundPosition = basePosition
+
     invisibleFallVelocity    = 0
     invisibleLastGroundCheck = os.clock()
 
@@ -284,6 +287,12 @@ local function mirrorInvisiblePose()
         smoothVisualY = smoothVisualY + (desiredY - smoothVisualY) * math.min(dt * LANDING_LERP_SPEED, 1)
         targetY = smoothVisualY
         invisibleFallVelocity = 0
+
+        lastTrackedGroundPosition = Vector3.new(
+            realRoot.Position.X,
+            targetY,
+            realRoot.Position.Z
+        )
     else
         invisibleFallVelocity = math.min((invisibleFallVelocity or 0) + 110 * dt, 180)
         targetY               = currentVisualPos.Y - invisibleFallVelocity * dt
@@ -321,8 +330,9 @@ local function startInvisibleFlight()
     invisibleOriginalJumpPower     = humanoid.JumpPower
     invisibleWalkSpeed             = math.max(humanoid.WalkSpeed, 16)
 
-    invisibleGroundOffset = nil
-    smoothVisualY         = nil
+    invisibleGroundOffset     = nil
+    smoothVisualY             = nil
+    lastTrackedGroundPosition = invisibleOriginalPosition
 
     setupCollisionGroups()
     assignGroupToCharacter(character, GROUP_INVISIBLE)
@@ -400,50 +410,33 @@ local function stopInvisibleFlight()
         pcall(function() cam.CameraSubject = humanoid end)
     end
 
-    if rootPart and rootPart.Parent and invisibleOriginalPosition then
-        local startY   = rootPart.Position.Y
-        local endY     = invisibleOriginalPosition.Y
-        local duration = 0.35
-        local elapsed  = 0
+    local landTarget = lastTrackedGroundPosition or invisibleOriginalPosition
 
-        local landingConn
-        landingConn = RunService.Heartbeat:Connect(function(dt)
-            elapsed += dt
-            local alpha = math.min(elapsed / duration, 1)
-            local t     = 1 - (1 - alpha)^3
-
-            pcall(function()
-                rootPart.CFrame = CFrame.new(
-                    rootPart.Position.X,
-                    startY + (endY - startY) * t,
-                    rootPart.Position.Z
-                )
-                rootPart.AssemblyLinearVelocity  = Vector3.zero
-                rootPart.AssemblyAngularVelocity = Vector3.zero
-            end)
-
-            if alpha >= 1 then
-                landingConn:Disconnect()
-
-                if humanoid and humanoid.Parent then
-                    pcall(function()
-                        humanoid.PlatformStand = invisibleOriginalPlatformStand == true
-                        humanoid.AutoRotate    = invisibleOriginalAutoRotate ~= false
-                        
-                        if invisibleOriginalJumpHeight ~= nil then humanoid.JumpHeight = invisibleOriginalJumpHeight end
-                        if invisibleOriginalJumpPower  ~= nil then humanoid.JumpPower  = invisibleOriginalJumpPower  end
-                        humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
-                        humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
-                    end)
-                end
-
-                invisibleOriginalPosition      = nil
-                invisibleOriginalAutoRotate    = nil
-                invisibleOriginalPlatformStand = nil
-                invisibleOriginalJumpHeight    = nil
-                invisibleOriginalJumpPower     = nil
-            end
+    -- ✅ PURE INSTANT SNAP — zero lerp, zero duration, direct CFrame set
+    if rootPart and rootPart.Parent and landTarget then
+        pcall(function()
+            rootPart.CFrame                  = CFrame.new(landTarget.X, landTarget.Y, landTarget.Z)
+            rootPart.AssemblyLinearVelocity  = Vector3.zero
+            rootPart.AssemblyAngularVelocity = Vector3.zero
         end)
+
+        if humanoid and humanoid.Parent then
+            pcall(function()
+                humanoid.PlatformStand = invisibleOriginalPlatformStand == true
+                humanoid.AutoRotate    = invisibleOriginalAutoRotate ~= false
+                if invisibleOriginalJumpHeight ~= nil then humanoid.JumpHeight = invisibleOriginalJumpHeight end
+                if invisibleOriginalJumpPower  ~= nil then humanoid.JumpPower  = invisibleOriginalJumpPower  end
+                humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+                humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
+        end
+
+        invisibleOriginalPosition      = nil
+        invisibleOriginalAutoRotate    = nil
+        invisibleOriginalPlatformStand = nil
+        invisibleOriginalJumpHeight    = nil
+        invisibleOriginalJumpPower     = nil
+        lastTrackedGroundPosition      = nil
     end
 end
 
@@ -475,8 +468,9 @@ local function setLocalInvisible(enabled)
 end
 
 player.CharacterAdded:Connect(function()
-    isInvisible      = false
-    invisibleEnabled = false
+    isInvisible               = false
+    invisibleEnabled          = false
+    lastTrackedGroundPosition = nil
     stopInvisibleFlight()
     task.wait(0.5)
     updateCharacterReferences()
